@@ -1,0 +1,5 @@
+Contact: jane.doe@example.com
+Phone: 555-123-4567
+AWS key: AKIAIOSFODNN7EXAMPLE
+GitHub token: ghp_abcdefghijklmnopqrstuvwxyz1234567890
+Note: this file is only a test fixture with fake values.

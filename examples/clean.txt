@@ -1,0 +1,3 @@
+Hello world.
+This file contains no personal data and no secrets.
+It is safe to share.
