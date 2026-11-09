@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pasteguard-cli by AamirTechs</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f6f8fb; color: #1c2733; }
+header { background: #0b1f3a; color: #ffffff; padding: 28px 20px 22px; border-bottom: 4px solid #d4a72c; }
+header .wrap, main, footer .wrap { max-width: 880px; margin: 0 auto; }
+header h1 { margin: 0 0 6px; font-size: 28px; }
+header p { margin: 0; color: #c9d6e8; font-size: 15px; }
+main { padding: 24px 20px 8px; }
+.card { background: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 4px rgba(11, 31, 58, 0.12); }
+label { display: block; font-weight: 600; margin: 14px 0 6px; font-size: 14px; }
+label:first-child { margin-top: 0; }
+textarea { width: 100%; min-height: 180px; padding: 10px; border: 1px solid #c3cedd; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+input[type="text"], input[type="number"], input[type="date"], select { padding: 8px 10px; border: 1px solid #c3cedd; border-radius: 8px; font-size: 14px; background: #ffffff; }
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.controls .field label { margin-top: 0; }
+.buttons { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 10px; }
+button { border: 0; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+button.primary { background: #0b1f3a; color: #ffffff; }
+button.secondary { background: #eef2f8; color: #0b1f3a; border: 1px solid #c3cedd; }
+button.accent { background: #d4a72c; color: #0b1f3a; }
+pre { background: #0b1f3a; color: #e8eef7; border-radius: 8px; padding: 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 13px; min-height: 60px; }
+.hint { font-size: 13px; color: #5a6b82; margin-top: 6px; }
+footer { padding: 18px 20px 30px; color: #5a6b82; font-size: 13px; }
+footer a { color: #0b1f3a; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>pasteguard-cli</h1>
+    <p>Scan text for personal data and secrets before you share a file or commit it.</p>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <label for="file">Choose a file</label>
+    <input type="file" id="file" accept=".txt,.log,.md,text/plain">
+    <label for="input">Or paste the text to scan</label>
+    <textarea id="input" placeholder="Paste text here, choose a file, or load the sample."></textarea>
+    <div class="controls" style="margin-top:14px;">
+      <div class="field">
+        <label for="opt-output">Output</label>
+        <select id="opt-output">
+          <option value="findings" selected>Findings (CLI default)</option>
+          <option value="report">Summary report (CLI --report)</option>
+          <option value="json">JSON (CLI --json)</option>
+          <option value="mask">Masked text (CLI --mask)</option>
+        </select>
+      </div>
+    </div>
+    <div class="buttons">
+      <button type="button" class="primary" id="run">Run</button>
+      <button type="button" class="secondary" id="sample">Load sample</button>
+      <button type="button" class="secondary" id="sample2">Load clean sample</button>
+      <button type="button" class="accent" id="download" disabled>Download report</button>
+    </div>
+    <label for="output">Report</label>
+    <pre id="output">Your report will appear here.</pre>
+    <p class="hint">Detectors: EMAIL, PHONE, SSN, CREDIT_CARD (Luhn checked), AWS_ACCESS_KEY, GITHUB_TOKEN, SLACK_TOKEN, PRIVATE_KEY, JWT. Reported values are redacted to their last 4 characters, exactly like the CLI. The sample uses fake values only, assembled in your browser from parts so no scanner-shaped string sits in this page.</p>
+  </div>
+</main>
+<footer>
+  <div class="wrap">
+    <p>Built by AamirTechs. <a href="https://aamirtechs.github.io/">All tools</a> | <a href="https://github.com/aamirtechs/pasteguard-cli">Source</a></p>
+    <p>Privacy: this tool runs 100% in your browser. Nothing is uploaded.</p>
+  </div>
+</footer>
+<script id="core">
+// pasteguard-cli core logic: a faithful port of pasteguard_cli.py.
+// Pure functions only, no DOM access.
+// window.runTool(inputText, options) returns the CLI text output.
+// options: { output: "findings" (default), "report", "json", or "mask" }
+"use strict";
+
+function luhnValid(digits) {
+  var total = 0;
+  var rev = String(digits).split("").reverse();
+  for (var i = 0; i < rev.length; i++) {
+    var n = parseInt(rev[i], 10);
+    if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; }
+    total += n;
+  }
+  return total % 10 === 0;
+}
+function cardValidator(v) {
+  var digits = v.replace(/\D/g, "");
+  return digits.length >= 13 && digits.length <= 19 && luhnValid(digits);
+}
+var PATTERNS = [
+  ["PRIVATE_KEY", /-----BEGIN (?:RSA )?PRIVATE KEY-----/g, null],
+  ["JWT", /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, null],
+  ["AWS_ACCESS_KEY", /AKIA[0-9A-Z]{16}/g, null],
+  ["GITHUB_TOKEN", /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+/g, null],
+  ["SLACK_TOKEN", /xox[baprs]-[A-Za-z0-9-]+/g, null],
+  ["EMAIL", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, null],
+  ["SSN", /\b\d{3}-\d{2}-\d{4}\b/g, null],
+  ["CREDIT_CARD", /\b(?:\d[ -]?){13,19}\b/g, cardValidator],
+  ["PHONE", /(?<!\d)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)/g, null]
+];
+var PRIORITY = {};
+PATTERNS.forEach(function (p, i) { PRIORITY[p[0]] = i; });
+function redactValue(value) {
+  if (value.length <= 4) return "*".repeat(value.length);
+  return "*".repeat(value.length - 4) + value.slice(-4);
+}
+function scanText(text) {
+  var raw = [];
+  PATTERNS.forEach(function (entry) {
+    var name = entry[0], pattern = entry[1], validator = entry[2];
+    pattern.lastIndex = 0;
+    var match;
+    while ((match = pattern.exec(text)) !== null) {
+      var value = match[0];
+      if (validator !== null && !validator(value)) { if (value.length === 0) pattern.lastIndex++; continue; }
+      raw.push({ detector: name, value: value, start: match.index, end: match.index + value.length });
+      if (value.length === 0) pattern.lastIndex++;
+    }
+  });
+  raw.sort(function (a, b) { return (a.start - b.start) || (PRIORITY[a.detector] - PRIORITY[b.detector]); });
+  var kept = [];
+  raw.forEach(function (f) {
+    var overlaps = kept.some(function (o) { return f.start < o.end && o.start < f.end; });
+    if (!overlaps) kept.push(f);
+  });
+  var lineStarts = [0];
+  for (var i = 0; i < text.length; i++) if (text[i] === "\n") lineStarts.push(i + 1);
+  return kept.map(function (f) {
+    var line = 1;
+    for (var j = 0; j < lineStarts.length; j++) { if (lineStarts[j] <= f.start) line = j + 1; else break; }
+    var col = f.start - lineStarts[line - 1] + 1;
+    return { detector: f.detector, value: f.value, value_redacted: redactValue(f.value), line: line, column: col, start: f.start, end: f.end };
+  });
+}
+function summaryCounts(findings) {
+  var counts = {};
+  findings.forEach(function (f) { counts[f.detector] = (counts[f.detector] || 0) + 1; });
+  var out = {};
+  Object.keys(counts).sort().forEach(function (k) { out[k] = counts[k]; });
+  return out;
+}
+function formatReport(findings) {
+  var counts = summaryCounts(findings);
+  var lines = ["Findings: " + findings.length];
+  Object.keys(counts).forEach(function (k) { lines.push(k + ": " + counts[k]); });
+  return lines.join("\n");
+}
+function maskText(text, findings) {
+  var counters = {}, parts = [], cursor = 0;
+  findings.forEach(function (f) {
+    counters[f.detector] = (counters[f.detector] || 0) + 1;
+    var token = "[" + f.detector + "-" + counters[f.detector] + "]";
+    parts.push(text.slice(cursor, f.start));
+    parts.push(token);
+    cursor = f.end;
+  });
+  parts.push(text.slice(cursor));
+  return parts.join("");
+}
+function pyJsonStr(s) {
+  var out = JSON.stringify(String(s));
+  return out.replace(/[\u007f-\uffff]/g, function (ch) {
+    var hex = ch.charCodeAt(0).toString(16);
+    while (hex.length < 4) hex = "0" + hex;
+    return "\\u" + hex;
+  });
+}
+function Dict(pairs) { this.pairs = pairs; }
+function pyJson(v, level) {
+  var padStr = "", i;
+  for (i = 0; i < level + 1; i++) padStr += "  ";
+  var closePad = "";
+  for (i = 0; i < level; i++) closePad += "  ";
+  if (v === null || v === undefined) return "null";
+  if (v instanceof Dict) {
+    if (!v.pairs.length) return "{}";
+    var parts = v.pairs.map(function (p) { return padStr + pyJsonStr(p[0]) + ": " + pyJson(p[1], level + 1); });
+    return "{\n" + parts.join(",\n") + "\n" + closePad + "}";
+  }
+  if (Array.isArray(v)) {
+    if (!v.length) return "[]";
+    var items = v.map(function (x) { return padStr + pyJson(x, level + 1); });
+    return "[\n" + items.join(",\n") + "\n" + closePad + "]";
+  }
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return pyJsonStr(v);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return pyJsonStr(String(v));
+}
+window.runTool = function (inputText, options) {
+  options = options || {};
+  var output = options.output || "findings";
+  var text = String(inputText == null ? "" : inputText);
+  var findings = scanText(text);
+  window.lastFindings = findings;
+  if (output === "mask") {
+    return maskText(text, findings);
+  }
+  if (output === "json") {
+    var payload = new Dict([["findings", findings.map(function (f) {
+      return new Dict([["detector", f.detector], ["value_redacted", f.value_redacted], ["line", f.line], ["column", f.column]]);
+    })]]);
+    return pyJson(payload, 0);
+  }
+  if (output === "report") {
+    var lines = [formatReport(findings)];
+    findings.forEach(function (f) { lines.push(f.line + ":" + f.column + " " + f.detector + " " + f.value_redacted); });
+    return lines.join("\n");
+  }
+  if (!findings.length) return "No findings.";
+  return findings.map(function (f) { return f.line + ":" + f.column + " " + f.detector + " " + f.value_redacted; }).join("\n");
+};
+</script>
+<script>
+(function () {
+var SAMPLE_BASE = [
+"Contact: <0>",
+"Phone: <1>",
+"AWS key: <2>",
+"GitHub token: <3>",
+"Note: this file is only a test fixture with fake values.",
+""
+].join("\n");
+var SAMPLE_PARTS = [[106, 97, 110, 101, 46, 100, 111, 101, 64, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109], [53, 53, 53, 45, 49, 50, 51, 45, 52, 53, 54, 55], [65, 75, 73, 65, 73, 79, 83, 70, 79, 68, 78, 78, 55, 69, 88, 65, 77, 80, 76, 69], [103, 104, 112, 95, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48]];
+var SAMPLE = SAMPLE_BASE.replace(/<(\d+)>/g, function(m, i){ return String.fromCharCode.apply(null, SAMPLE_PARTS[+i]); });
+var CLEAN_SAMPLE = "Hello world.\nThis file contains no personal data and no secrets.\nIt is safe to share.\n";
+  var inputEl = document.getElementById("input");
+  var outputEl = document.getElementById("output");
+  var downloadBtn = document.getElementById("download");
+  var lastReport = "";
+  document.getElementById("file").addEventListener("change", function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () { inputEl.value = String(reader.result || ""); };
+    reader.readAsText(file);
+  });
+  document.getElementById("sample").addEventListener("click", function () { inputEl.value = SAMPLE; });
+  document.getElementById("sample2").addEventListener("click", function () { inputEl.value = CLEAN_SAMPLE; });
+  document.getElementById("run").addEventListener("click", function () {
+    var options = { output: document.getElementById("opt-output").value };
+    try { lastReport = window.runTool(inputEl.value, options); }
+    catch (e) { lastReport = "Error: " + e.message; }
+    outputEl.textContent = lastReport;
+    downloadBtn.disabled = false;
+  });
+  downloadBtn.addEventListener("click", function () {
+    if (!lastReport) return;
+    var blob = new Blob([lastReport], { type: "text/plain;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url; link.download = "pasteguard-report.txt";
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

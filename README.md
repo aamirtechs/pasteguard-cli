@@ -1,4 +1,5 @@
 # pasteguard-cli
+**Live tool:** https://aamirtechs.github.io/pasteguard-cli/ (runs in your browser, no install)
 
 A zero dependency Python CLI that scans files and stdin for personal data and secrets before you share a file or commit it. It is a command line companion to the BeforeYouPaste idea: check text first, mask it when you need to share it, and restore it later with your own mapping file.
 
